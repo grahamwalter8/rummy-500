@@ -26,8 +26,10 @@ const cardId = c => `${c.rank}${c.suit}`;
 function freshDeck() {
   const d = [];
   for (const s of SUITS) for (const r of RANKS) d.push({ rank:r, suit:s });
+  // Cryptographically strong Fisher-Yates shuffle. Every new round/rematch
+  // creates a fresh 52-card deck and shuffles all 52 positions independently.
   for (let i=d.length-1;i>0;i--) {
-    const j=Math.floor(Math.random()*(i+1));
+    const j=crypto.randomInt(i+1);
     [d[i],d[j]]=[d[j],d[i]];
   }
   return d;
@@ -60,7 +62,8 @@ function newRoom(code) {
     winner:null,
     lastAction:"Game started",
     turnState:{drawn:false, source:null, drawnIds:[], requiredId:null, requiredUsed:false},
-    rummyOpen:false
+    rummyOpen:false,
+    chat:[]
   };
 }
 
@@ -83,7 +86,9 @@ function publicState(room, socketId) {
     phase:room.phase,
     winner:room.winner,
     lastAction:room.lastAction,
-    rummyOpen:room.rummyOpen
+    rummyOpen:room.rummyOpen,
+    turnState:room.turnState,
+    chat:room.chat
   };
 }
 
@@ -432,6 +437,26 @@ io.on("connection",socket=>{
     if(room.hands[p.seat].length===0){
       finishRound(room,"hand emptied by Rummy");
     }
+    broadcast(room);
+  });
+
+  socket.on("reorderHand",({order})=>{
+    const p=playerFor(socket.id), room=p&&rooms.get(p.room);
+    if(!room || !Array.isArray(order) || p.seat<0)return;
+    const hand=room.hands[p.seat];
+    const byId=new Map(hand.map(c=>[cardId(c),c]));
+    if(order.length!==hand.length || order.some(id=>!byId.has(id)) || new Set(order).size!==order.length)return;
+    room.hands[p.seat]=order.map(id=>byId.get(id));
+    broadcast(room);
+  });
+
+  socket.on("chatMessage",({message})=>{
+    const p=playerFor(socket.id), room=p&&rooms.get(p.room);
+    if(!room)return;
+    const text=String(message||"").trim().slice(0,500);
+    if(!text)return;
+    room.chat.push({name:room.players[p.seat]?.name||"Player",message:text,seat:p.seat,time:Date.now()});
+    if(room.chat.length>100)room.chat.splice(0,room.chat.length-100);
     broadcast(room);
   });
 
